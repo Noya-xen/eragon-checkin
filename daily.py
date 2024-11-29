@@ -3,30 +3,48 @@ import time
 import json
 from selenium import webdriver
 from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.keys import Keys
-from selenium.webdriver.common.desired_capabilities import DesiredCapabilities
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
-# Konfigurasi folder token dan URL
+# Konfigurasi folder dan file token
 TOKEN_FOLDER = "../token"
+TOKEN_FILE = f"{TOKEN_FOLDER}/token.json"
 WEBSITE_URL = "https://eragon.gg/store/home"
-XPATH_POPUP = "/html/body/div[3]/div[3]/div/section/div/div[2]"
+XPATH_POPUP = "/html/div[1]"
 XPATH_CLAIM = "/html/body/div[3]/div[3]/div/section/div/div[2]/div[2]/div/button"
 
-# Fungsi untuk memuat token akun dari folder
-def load_tokens():
-    tokens = []
-    for file_name in os.listdir(TOKEN_FOLDER):
-        if file_name.endswith(".json"):
-            file_path = os.path.join(TOKEN_FOLDER, file_name)
-            with open(file_path, "r") as file:
-                tokens.append(json.load(file))
+# Fungsi untuk meminta akses token dari pengguna
+def request_access_tokens():
+    print("Masukkan akses token Anda (pisahkan dengan koma jika lebih dari satu):")
+    token_input = input("> ")
+    tokens = [token.strip() for token in token_input.split(",") if token.strip()]
     return tokens
 
-# Fungsi untuk menjalankan daily check-in
-def checkin_with_token(token):
+# Fungsi untuk menyimpan token ke dalam file JSON
+def save_tokens(tokens):
+    if not os.path.exists(TOKEN_FOLDER):
+        os.makedirs(TOKEN_FOLDER)  # Buat folder jika belum ada
+    with open(TOKEN_FILE, "w") as file:
+        json.dump(tokens, file, indent=4)
+    print(f"Access token disimpan ke {TOKEN_FILE}")
+
+# Fungsi untuk memuat token dari file
+def load_tokens():
+    try:
+        with open(TOKEN_FILE, "r") as file:
+            tokens = json.load(file)
+            print(f"Ditemukan {len(tokens)} access token.")
+            return tokens
+    except FileNotFoundError:
+        print(f"Error: File {TOKEN_FILE} tidak ditemukan.")
+        return []
+    except json.JSONDecodeError:
+        print(f"Error: Format file {TOKEN_FILE} tidak valid.")
+        return []
+
+# Fungsi untuk menjalankan daily check-in menggunakan access token
+def checkin_with_token(access_token):
     # Setup Selenium dengan ChromeDriver
     chrome_options = Options()
     chrome_options.add_argument("--headless")  # Jalankan dalam mode headless
@@ -36,21 +54,32 @@ def checkin_with_token(token):
     driver = webdriver.Chrome(options=chrome_options)
     driver.get(WEBSITE_URL)
 
-    # Tambahkan token atau cookie
-    for key, value in token.items():
-        driver.add_cookie({"name": key, "value": value, "domain": ".eragon.gg"})
+    # Menambahkan access token ke header
+    script = f"""
+    fetch("{WEBSITE_URL}", {{
+        method: "GET",
+        headers: {{
+            "Authorization": "Bearer {access_token}"
+        }}
+    }});
+    """
+    driver.execute_script(script)
 
-    # Refresh halaman agar cookie diterapkan
+    # Tunggu halaman memuat ulang dengan token
     driver.refresh()
-    time.sleep(5)  # Tunggu popup muncul
+    time.sleep(5)
 
     try:
-        # Cek jika elemen popup muncul
-        popup_element = driver.find_element(By.XPATH, XPATH_POPUP)
+        # Tunggu hingga elemen popup muncul
+        popup_element = WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.XPATH, XPATH_POPUP))
+        )
         print("Popup ditemukan, mencoba klaim...")
 
         # Klik tombol Claim Now
-        claim_button = driver.find_element(By.XPATH, XPATH_CLAIM)
+        claim_button = WebDriverWait(driver, 10).until(
+            EC.element_to_be_clickable((By.XPATH, XPATH_CLAIM))
+        )
         claim_button.click()
         print("Berhasil melakukan check-in!")
     except Exception as e:
@@ -59,12 +88,23 @@ def checkin_with_token(token):
         driver.quit()
 
 if __name__ == "__main__":
-    tokens = load_tokens()
-    print(f"Ditemukan {len(tokens)} akun untuk check-in.")
+    print("=== Daily Check-In Script ===")
 
-    for i, token in enumerate(tokens):
-        print(f"\n=== Check-in akun ke-{i+1} ===")
-        checkin_with_token(token)
-        if i < len(tokens) - 1:
-            print("Menunggu 5 detik sebelum akun berikutnya...")
-            time.sleep(5)
+    # Cek apakah file token sudah ada
+    tokens = load_tokens()
+    if not tokens:
+        # Jika tidak ada token, minta dari pengguna
+        print("Tidak ada access token yang ditemukan.")
+        tokens = request_access_tokens()
+        save_tokens(tokens)
+
+    # Proses check-in untuk setiap token
+    if tokens:
+        for i, token in enumerate(tokens):
+            print(f"\n=== Check-in akun ke-{i+1} ===")
+            checkin_with_token(token)
+            if i < len(tokens) - 1:
+                print("Menunggu 5 detik sebelum akun berikutnya...")
+                time.sleep(5)
+    else:
+        print("Tidak ada token yang diproses.")
